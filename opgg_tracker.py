@@ -8,7 +8,7 @@ import re
 import requests
 from typing import Tuple, List, Dict
 from dataclasses import dataclass, field
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -80,14 +80,32 @@ def get_credentials():
                 "https://www.googleapis.com/auth/drive"]
     )
 
-def parse_riot_id(riot_id: str) -> Tuple[str, str]:
-    """Parse 'GameName#Tag' into (game_name, tag)."""
+def parse_riot_id(riot_id: str) -> Tuple[str, str, str]:
+    """Parse 'GameName#Tag' or 'GameName#Tag (region)' into (name, tag, region_hint)."""
     riot_id = riot_id.strip()
+    
+    # Extract parenthesized region hint, e.g. "Spoon#loh (euwest)" -> hint="euwest"
+    region_hint = ""
+    paren_match = re.search(r'\s*\(([^)]+)\)\s*$', riot_id)
+    if paren_match:
+        region_hint = paren_match.group(1).strip().lower()
+        riot_id = riot_id[:paren_match.start()].strip()
+    
     for sep in [" #", "#"]:
         if sep in riot_id:
             parts = riot_id.split(sep, 1)
-            return parts[0].strip(), parts[1].strip() if len(parts) > 1 else ""
-    return riot_id, ""
+            return parts[0].strip(), parts[1].strip() if len(parts) > 1 else "", region_hint
+    return riot_id, "", region_hint
+
+def parse_opgg_url(url: str) -> Tuple[str, str, str]:
+    """Parse an OP.GG URL into (name, tag, region). Returns ('','','') on failure."""
+    match = re.search(r'op\.gg/lol/summoners/([a-z]+)/([^/?#]+)-([^/?#]+)', url)
+    if match:
+        region = match.group(1)
+        name = unquote(match.group(2).replace("+", " "))
+        tag = unquote(match.group(3).replace("+", " "))
+        return name, tag, region
+    return "", "", ""
 
 def get_opgg_url(name: str, tag: str, region: str) -> str:
     return f"https://op.gg/lol/summoners/{region}/{quote(name)}-{quote(tag)}"
@@ -213,16 +231,32 @@ def fetch_player(player: Player) -> Player:
     if not player.main_account.strip():
         print(f"  [Empty]: Field is empty")
         return player
-        
-    name, tag = parse_riot_id(player.main_account)
+    
+    # Check if main_account is an OP.GG URL
+    region_hint = ""
+    if "op.gg/" in player.main_account:
+        name, tag, region_hint = parse_opgg_url(player.main_account)
+    else:
+        name, tag, region_hint = parse_riot_id(player.main_account)
+    
     if not name or not tag:
         print(f"  {player.main_account}: Invalid format")
         return player
     
     print(f"  {name}#{tag}:", end=" ")
     
-    # Prioritize region from tag
-    regions = [tag.lower()] + REGIONS if tag.lower() in REGIONS else REGIONS
+    # Normalize common region aliases
+    REGION_ALIASES = {"euwest": "euw", "eueast": "eune", "euwe": "euw", "west": "euw", "east": "eune"}
+    if region_hint:
+        region_hint = REGION_ALIASES.get(region_hint, region_hint)
+    
+    # Build region priority: hint first, then tag, then defaults
+    regions = []
+    if region_hint:
+        regions.append(region_hint)
+    if tag.lower() in REGIONS:
+        regions.append(tag.lower())
+    regions.extend(REGIONS)
     regions = list(dict.fromkeys(regions))  # Remove duplicates
     
     for region in regions:
@@ -245,9 +279,15 @@ def fetch_player(player: Player) -> Player:
             parts = player.current_rank.split()
             player.total_lp = calculate_lp(parts[0], parts[1] if len(parts) > 1 else "I", player.current_lp)
         
-        t_name, t_tag = parse_riot_id(player.tournament_account)
-        if t_name and t_tag:
-            player.opgg_tournament = get_opgg_url(t_name, t_tag, region)
+        # Handle tournament account (may also be an OP.GG URL)
+        if "op.gg/" in player.tournament_account:
+            t_name, t_tag, t_region = parse_opgg_url(player.tournament_account)
+            if t_name and t_tag:
+                player.opgg_tournament = get_opgg_url(t_name, t_tag, t_region or region)
+        else:
+            t_name, t_tag, _ = parse_riot_id(player.tournament_account)
+            if t_name and t_tag:
+                player.opgg_tournament = get_opgg_url(t_name, t_tag, region)
         
         print(f"{player.current_rank} ({player.current_lp} LP) | Peak: {player.peak_rank}")
         return player
