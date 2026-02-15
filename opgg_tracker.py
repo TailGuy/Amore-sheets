@@ -187,7 +187,7 @@ def fetch_from_opgg(game_name: str, tag: str, region: str) -> Dict:
 def parse_opgg_response(text: str) -> Dict:
     """Parse OP.GG response for rank data."""
     text = text.replace("\n", "").replace("\r", "")
-    result = {"current_rank": "UNRANKED", "current_lp": 0, "peak_rank": "UNRANKED"}
+    result = {"current_rank": "UNRANKED", "current_lp": 0, "peak_rank": "UNRANKED", "peak_lp": 0}
     
     # Current solo rank (handles both formats)
     # Format 1: LeagueStat("SOLORANKED",TierInfo("GOLD",4,12))
@@ -201,29 +201,43 @@ def parse_opgg_response(text: str) -> Dict:
         
     # Determine Peak Rank (Max of all sources)
     best = "UNRANKED"
+    best_lp = 0
+    best_total = 0  # Total LP used for comparison
     
     # Use current rank as starting point for peak
     if result["current_rank"] != "UNRANKED":
         best = result["current_rank"]
+        best_lp = result["current_lp"]
+        parts = best.split()
+        best_total = calculate_lp(parts[0], parts[1] if len(parts) > 1 else "I", best_lp)
     
     # Check current split's "Top Tier" (RankEntrie1 format)
     # Format: RankEntrie1("SOLORANKED",RankInfo("SILVER",2,38,...))
-    for tier, div in re.findall(r'RankEntrie1\("[A-Z]+",RankInfo\("([A-Z]+)",(\d+),', text):
+    for tier, div, lp in re.findall(r'RankEntrie1\("[A-Z]+",RankInfo\("([A-Z]+)",(\d+),(\d+)', text):
         div_roman = {1: "I", 2: "II", 3: "III", 4: "IV"}.get(int(div), "IV")
         rank = format_rank(tier, div_roman)
-        if compare_ranks(rank, best) > 0:
+        total = calculate_lp(tier, div_roman, int(lp))
+        if total > best_total:
             best = rank
+            best_lp = int(lp)
+            best_total = total
             
     # Check historical seasons (PreviousSeason format)
     # Format 1: PreviousSeason(31,TierInfo1("SILVER",3))  
     # Format 2: PreviousSeason(21,TierInfo("GRANDMASTER",1,640,null,...))
-    for tier, div in re.findall(r'PreviousSeason\(\d+,TierInfo\d*\("([A-Z]+)",(\d+)', text):
-        div_roman = {1: "I", 2: "II", 3: "III", 4: "IV"}.get(int(div), "IV")
+    for match in re.finditer(r'PreviousSeason\(\d+,TierInfo\d*\("([A-Z]+)",(\d+)(?:,(\d+))?', text):
+        tier, div = match.group(1), int(match.group(2))
+        lp = int(match.group(3)) if match.group(3) else 0
+        div_roman = {1: "I", 2: "II", 3: "III", 4: "IV"}.get(div, "IV")
         rank = format_rank(tier, div_roman)
-        if compare_ranks(rank, best) > 0:
+        total = calculate_lp(tier, div_roman, lp)
+        if total > best_total:
             best = rank
+            best_lp = lp
+            best_total = total
     
     result["peak_rank"] = best
+    result["peak_lp"] = best_lp
     return result
 
 def fetch_player(player: Player) -> Player:
@@ -280,7 +294,7 @@ def fetch_player(player: Player) -> Player:
         
         if player.peak_rank != "UNRANKED":
             parts = player.peak_rank.split()
-            player.total_lp = calculate_lp(parts[0], parts[1] if len(parts) > 1 else "I", 0)
+            player.total_lp = calculate_lp(parts[0], parts[1] if len(parts) > 1 else "I", data["peak_lp"])
         
         # Handle tournament account (may also be an OP.GG URL)
         if "op.gg/" in player.tournament_account:
