@@ -243,6 +243,9 @@ def fetch_player(player: Player) -> Player:
         print(f"  {player.main_account}: Invalid format")
         return player
     
+    # Store cleaned name back on the player for sheet display
+    player.main_account = f"{name}#{tag}"
+    
     print(f"  {name}#{tag}:", end=" ")
     
     # Normalize common region aliases
@@ -283,10 +286,12 @@ def fetch_player(player: Player) -> Player:
         if "op.gg/" in player.tournament_account:
             t_name, t_tag, t_region = parse_opgg_url(player.tournament_account)
             if t_name and t_tag:
+                player.tournament_account = f"{t_name}#{t_tag}"
                 player.opgg_tournament = get_opgg_url(t_name, t_tag, t_region or region)
         else:
             t_name, t_tag, _ = parse_riot_id(player.tournament_account)
             if t_name and t_tag:
+                player.tournament_account = f"{t_name}#{t_tag}"
                 player.opgg_tournament = get_opgg_url(t_name, t_tag, region)
         
         print(f"{player.current_rank} ({player.current_lp} LP) | Peak: {player.peak_rank}")
