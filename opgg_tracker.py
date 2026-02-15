@@ -240,41 +240,32 @@ def parse_opgg_response(text: str) -> Dict:
     result["peak_lp"] = best_lp
     return result
 
-def fetch_player(player: Player) -> Player:
-    """Fetch and populate player rank data."""
-    if not player.main_account.strip():
-        print(f"  [Empty]: Field is empty")
-        return player
+REGION_ALIASES = {"euwest": "euw", "eueast": "eune", "euwe": "euw", "west": "euw", "east": "eune"}
+
+def _lookup_account(account_str: str) -> Dict:
+    """Look up a single account on OP.GG. Returns rank data dict or None."""
+    if not account_str or not account_str.strip():
+        return None
     
-    # Check if main_account is an OP.GG URL
     region_hint = ""
-    if "op.gg/" in player.main_account:
-        name, tag, region_hint = parse_opgg_url(player.main_account)
+    if "op.gg/" in account_str:
+        name, tag, region_hint = parse_opgg_url(account_str)
     else:
-        name, tag, region_hint = parse_riot_id(player.main_account)
+        name, tag, region_hint = parse_riot_id(account_str)
     
     if not name or not tag:
-        print(f"  {player.main_account}: Invalid format")
-        return player
+        return None
     
-    # Store cleaned name back on the player for sheet display
-    player.main_account = f"{name}#{tag}"
-    
-    print(f"  {name}#{tag}:", end=" ")
-    
-    # Normalize common region aliases
-    REGION_ALIASES = {"euwest": "euw", "eueast": "eune", "euwe": "euw", "west": "euw", "east": "eune"}
     if region_hint:
         region_hint = REGION_ALIASES.get(region_hint, region_hint)
     
-    # Build region priority: hint first, then tag, then defaults
     regions = []
     if region_hint:
         regions.append(region_hint)
     if tag.lower() in REGIONS:
         regions.append(tag.lower())
     regions.extend(REGIONS)
-    regions = list(dict.fromkeys(regions))  # Remove duplicates
+    regions = list(dict.fromkeys(regions))
     
     for region in regions:
         resp = fetch_from_opgg(name, tag, region)
@@ -286,32 +277,102 @@ def fetch_player(player: Player) -> Player:
             if name.lower() not in resp["text"].lower():
                 continue
         
-        player.current_rank = data["current_rank"]
-        player.current_lp = data["current_lp"]
-        player.peak_rank = data["peak_rank"]
-        player.region = region
-        player.opgg_main = get_opgg_url(name, tag, region)
+        data["name"] = name
+        data["tag"] = tag
+        data["region"] = region
+        data["clean_id"] = f"{name}#{tag}"
+        data["opgg_url"] = get_opgg_url(name, tag, region)
         
-        if player.peak_rank != "UNRANKED":
-            parts = player.peak_rank.split()
-            player.total_lp = calculate_lp(parts[0], parts[1] if len(parts) > 1 else "I", data["peak_lp"])
-        
-        # Handle tournament account (may also be an OP.GG URL)
-        if "op.gg/" in player.tournament_account:
-            t_name, t_tag, t_region = parse_opgg_url(player.tournament_account)
-            if t_name and t_tag:
-                player.tournament_account = f"{t_name}#{t_tag}"
-                player.opgg_tournament = get_opgg_url(t_name, t_tag, t_region or region)
+        # Pre-calculate total LP from peak
+        if data["peak_rank"] != "UNRANKED":
+            parts = data["peak_rank"].split()
+            data["total_lp"] = calculate_lp(parts[0], parts[1] if len(parts) > 1 else "I", data["peak_lp"])
         else:
-            t_name, t_tag, _ = parse_riot_id(player.tournament_account)
-            if t_name and t_tag:
-                player.tournament_account = f"{t_name}#{t_tag}"
-                player.opgg_tournament = get_opgg_url(t_name, t_tag, region)
+            data["total_lp"] = 0
         
-        print(f"{player.current_rank} ({player.current_lp} LP) | Peak: {player.peak_rank}")
+        return data
+    
+    return None
+
+def fetch_player(player: Player) -> Player:
+    """Fetch and populate player rank data from both accounts, using the better peak."""
+    if not player.main_account.strip():
+        print(f"  [Empty]: Field is empty")
         return player
     
-    print("Not found")
+    # Pre-clean display name for logging
+    if "op.gg/" in player.main_account:
+        n, t, _ = parse_opgg_url(player.main_account)
+        if n and t:
+            display_name = f"{n}#{t}"
+    else:
+        n, t, _ = parse_riot_id(player.main_account)
+        if n and t:
+            display_name = f"{n}#{t}"
+        else:
+            display_name = player.main_account.strip()
+    
+    print(f"  {display_name}:", end=" ")
+    
+    # Look up both accounts
+    main_data = _lookup_account(player.main_account)
+    tourn_data = _lookup_account(player.tournament_account) if player.tournament_account.strip() else None
+    
+    # Pick the account with the better peak rank for scoring
+    best = None
+    if main_data and tourn_data:
+        best = main_data if main_data["total_lp"] >= tourn_data["total_lp"] else tourn_data
+    elif main_data:
+        best = main_data
+    elif tourn_data:
+        best = tourn_data
+    
+    if not best:
+        print("Not found")
+        return player
+    
+    # Use the best peak data for scoring
+    player.current_rank = best["current_rank"]
+    player.current_lp = best["current_lp"]
+    player.peak_rank = best["peak_rank"]
+    player.total_lp = best["total_lp"]
+    player.region = best["region"]
+    
+    # Clean display names and set OP.GG links
+    if main_data:
+        player.main_account = main_data["clean_id"]
+        player.opgg_main = main_data["opgg_url"]
+    else:
+        # Clean even if not found
+        if "op.gg/" in player.main_account:
+            n, t, _ = parse_opgg_url(player.main_account)
+            if n and t:
+                player.main_account = f"{n}#{t}"
+        else:
+            n, t, _ = parse_riot_id(player.main_account)
+            if n and t:
+                player.main_account = f"{n}#{t}"
+    
+    if tourn_data:
+        player.tournament_account = tourn_data["clean_id"]
+        player.opgg_tournament = tourn_data["opgg_url"]
+    elif player.tournament_account.strip():
+        if "op.gg/" in player.tournament_account:
+            n, t, r = parse_opgg_url(player.tournament_account)
+            if n and t:
+                player.tournament_account = f"{n}#{t}"
+                player.opgg_tournament = get_opgg_url(n, t, r or best["region"])
+        else:
+            n, t, _ = parse_riot_id(player.tournament_account)
+            if n and t:
+                player.tournament_account = f"{n}#{t}"
+                player.opgg_tournament = get_opgg_url(n, t, best["region"])
+    
+    src = "tournament" if best == tourn_data and main_data else "main"
+    if best == tourn_data and main_data:
+        print(f"{player.current_rank} ({player.current_lp} LP) | Peak: {player.peak_rank} (from tournament acc)")
+    else:
+        print(f"{player.current_rank} ({player.current_lp} LP) | Peak: {player.peak_rank}")
     return player
 
 # ============================================================================
