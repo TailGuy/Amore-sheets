@@ -278,9 +278,9 @@ def fetch_player(player: Player) -> Player:
         player.region = region
         player.opgg_main = get_opgg_url(name, tag, region)
         
-        if player.current_rank != "UNRANKED":
-            parts = player.current_rank.split()
-            player.total_lp = calculate_lp(parts[0], parts[1] if len(parts) > 1 else "I", player.current_lp)
+        if player.peak_rank != "UNRANKED":
+            parts = player.peak_rank.split()
+            player.total_lp = calculate_lp(parts[0], parts[1] if len(parts) > 1 else "I", 0)
         
         # Handle tournament account (may also be an OP.GG URL)
         if "op.gg/" in player.tournament_account:
