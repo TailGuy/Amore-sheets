@@ -1,52 +1,41 @@
-"""
-Webhook Server for Tournament Tracker
-Triggers opgg_tracker.py when receiving POST requests from Google Apps Script.
-"""
-
 import os
 import subprocess
-import secrets
+import threading
+from datetime import datetime
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
-
-# Secret token for authentication (set via environment variable)
 SECRET_TOKEN = os.environ.get("WEBHOOK_SECRET", "change-me-in-production")
+VENV_PYTHON = "/opt/opgg-tracker/venv/bin/python3"
+LOG_DIR = "/opt/opgg-tracker/logs"
+
+def run_tracker():
+    os.makedirs(LOG_DIR, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    log_file = f"{LOG_DIR}/run_{timestamp}.log"
+    
+    with open(log_file, "w") as f:
+        f.write(f"=== Tracker run started at {timestamp} ===\n\n")
+        result = subprocess.run(
+            [VENV_PYTHON, "opgg_tracker.py"],
+            cwd="/opt/opgg-tracker",
+            stdout=f,
+            stderr=subprocess.STDOUT
+        )
+        f.write(f"\n=== Finished with exit code {result.returncode} ===\n")
 
 @app.route("/health", methods=["GET"])
 def health():
-    """Health check endpoint."""
     return jsonify({"status": "ok"})
 
 @app.route("/trigger", methods=["POST"])
 def trigger():
-    """Trigger the tracker script."""
-    # Validate authorization
     auth = request.headers.get("Authorization", "")
     if auth != f"Bearer {SECRET_TOKEN}":
         return jsonify({"error": "Unauthorized"}), 401
     
-    try:
-        # Run the tracker script
-        result = subprocess.run(
-            ["python3", "opgg_tracker.py"],
-            capture_output=True,
-            text=True,
-            timeout=300,  # 5 minute timeout
-            cwd=os.path.dirname(os.path.abspath(__file__))
-        )
-        
-        return jsonify({
-            "status": "success" if result.returncode == 0 else "error",
-            "returncode": result.returncode,
-            "stdout": result.stdout[-2000:] if result.stdout else "",  # Last 2000 chars
-            "stderr": result.stderr[-500:] if result.stderr else ""
-        })
-    except subprocess.TimeoutExpired:
-        return jsonify({"error": "Script timeout"}), 504
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    threading.Thread(target=run_tracker, daemon=True).start()
+    return jsonify({"status": "started", "message": "Tracker running in background"})
 
 if __name__ == "__main__":
-    # Only for development - use gunicorn in production
     app.run(host="127.0.0.1", port=5000, debug=False)
