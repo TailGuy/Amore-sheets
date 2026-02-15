@@ -19,9 +19,9 @@ from googleapiclient.discovery import build
 # ============================================================================
 
 SERVICE_ACCOUNT_FILE = "gen-lang-client-0890515948-9d584c688878.json"
-SOURCE_SHEET_ID = "1lPRVUcBvy5MvTLZsCRCkoNCAv7-rWMPB6xb_XDPSc9w"
+SOURCE_SHEET_ID = "1d5Fps2yHHfRwIy9KepptT3QsuG8m2c64bVCEeY-Jgds"
 TARGET_SHEET_ID = "1_lLJHsz4tFLfDoeZw81U_-iA7U6VdkvCnVVwpg001jk"
-TARGET_SHEET_NAME = "[#3] Teams"  # Production sheet
+TARGET_SHEET_NAME = "[#4.0] Teams"  # Production sheet
 
 OPGG_MCP_URL = "https://mcp-api.op.gg/mcp"
 REGIONS = ["eune", "euw", "tr", "ru", "na", "kr"]
